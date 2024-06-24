@@ -5,7 +5,7 @@ import { Toolbar, Button, ClickButton } from "./toolbar.js";
 import { ToolTypes } from "./cad_tools/tools.js";
 import { FilterByDropDownMenu } from "./cad_tools/ui.js";
 
-import template from "./index.html";
+// import template from "./index.html";
 
 function TEMPLATE(id) {
   const shift = KeyMapper.getshortcuts("shift");
@@ -33,7 +33,7 @@ class Display {
    */
   constructor(container, options) {
     this.container = container;
-    this.container.innerHTML = TEMPLATE(this.container.id);
+    // this.container.innerHTML = TEMPLATE(this.container.id);
     // const fullWidth =
     //   options.cadWidth + (options.glass ? 0 : options.treeWidth);
     // this.handleMoreButton(fullWidth);
