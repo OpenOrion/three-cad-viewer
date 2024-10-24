@@ -80,7 +80,7 @@ class Viewer {
     this.treeview = null;
     this.cadTools = new Tools(this);
     this.newTreeBehavior = options.newTreeBehavior;
-
+    this.hideAllExceptPicked = false;
     this.ready = false;
     this.mixer = null;
     this.animation = new Animation("|");
@@ -1468,16 +1468,17 @@ class Viewer {
         this.bboxNeedsUpdate = true;
       }
 
-      if (meta) {
-        this.setState(id, [0, 0], nodeType);
-      } else if (shift) {
+      if (shift || this.hideAllExceptPicked) {
         this.removeLastBbox();
         this.treeview.hideAll();
         this.setState(id, [1, 1], nodeType);
         const center = boundingBox.center();
         this.controls.setTarget(new THREE.Vector3(...center));
         this.info.centerInfo(center);
-      } else {
+      } else if (meta) {
+        this.setState(id, [0, 0], nodeType);
+      }
+      else {
         this.info.bbInfo(path, name, boundingBox);
         this.setBoundingBox(id);
       }
