@@ -86,13 +86,13 @@ export class Tools {
     this.enabledTool = null;
   }
 
-  handleRemoveLastSelection() {
+  handleRemoveLastSelection(force = false) {
     if (this.distanceMeasurement.contextEnabled) {
-      this.distanceMeasurement.removeLastSelectedObj();
+      this.distanceMeasurement.removeLastSelectedObj(force);
     } else if (this.propertiesMeasurement.contextEnabled) {
-      this.propertiesMeasurement.removeLastSelectedObj();
+      this.propertiesMeasurement.removeLastSelectedObj(force);
     } else if (this.angleMeasurement.contextEnabled) {
-      this.angleMeasurement.removeLastSelectedObj();
+      this.angleMeasurement.removeLastSelectedObj(force);
     }
   }
 
@@ -110,15 +110,28 @@ export class Tools {
       this.angleMeasurement.handleSelection(selectedObj);
   }
 
+  /**
+   * obj: ObjectGroup
+   * fromSolid: boolean
+   */
+  handleRemoveLastSelected() {
+    if (this.distanceMeasurement.contextEnabled)
+      this.distanceMeasurement.removeLastSelectedObj();
+    else if (this.propertiesMeasurement.contextEnabled)
+      this.propertiesMeasurement.removeLastSelectedObj();
+    else if (this.angleMeasurement.contextEnabled)
+      this.angleMeasurement.removeLastSelectedObj();
+  }
+
   handleResetSelection() {
     if (this.distanceMeasurement.contextEnabled) {
-      this.distanceMeasurement.removeLastSelectedObj();
-      this.distanceMeasurement.removeLastSelectedObj();
+      this.distanceMeasurement.removeLastSelectedObj(true);
+      this.distanceMeasurement.removeLastSelectedObj(true);
     } else if (this.propertiesMeasurement.contextEnabled)
-      this.propertiesMeasurement.removeLastSelectedObj();
+      this.propertiesMeasurement.removeLastSelectedObj(true);
     else if (this.angleMeasurement.contextEnabled) {
-      this.angleMeasurement.removeLastSelectedObj();
-      this.angleMeasurement.removeLastSelectedObj();
+      this.angleMeasurement.removeLastSelectedObj(true);
+      this.angleMeasurement.removeLastSelectedObj(true);
     }
   }
 

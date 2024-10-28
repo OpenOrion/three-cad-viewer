@@ -82,7 +82,17 @@ canvas {
 
 .tcv_toggle_info_wrapper {
   display: none;
-  margin-left: 6px;
+  margin-left: 4px;
+}
+
+.tcv_info_label {
+  font-size: 12px;
+  font-family: sans-serif;
+  font-weight: bold;
+  margin-left: 4px;
+  padding-bottom: 4px;
+  vertical-align: top;
+  user-select: none;
 }
 
 .tcv_cad_info_glass {
@@ -256,6 +266,7 @@ th {
   overflow: scroll;
   height: 100%;
   margin: 0px 0px 0px 4px;
+  padding-top: 2px;
 }
 
 .tcv_btn {
@@ -378,6 +389,10 @@ input[type="button"] {
 .tcv_tab-unselected {
   border-bottom: 1px solid lightgray;
   font-weight: normal;
+}
+
+.tcv_tab-disabled {
+  color: var(--tcv-bg-pressed-color);
 }
 
 .tcv_vertical-center {

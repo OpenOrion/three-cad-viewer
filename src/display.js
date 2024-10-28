@@ -1,4 +1,4 @@
-import { getIconBackground } from "./icons.js";
+import { getIconBackground, getIconSvg } from "./icons.js";
 import { KeyMapper } from "./utils.js";
 import { Slider } from "./slider.js";
 import { Toolbar, Button, ClickButton } from "./toolbar.js";
@@ -56,6 +56,7 @@ class Display {
       "tcv_angle_measurement_panel",
     );
     this.cadTree = this._getElement("tcv_cad_tree_container");
+    this.cadTreeScrollContainer = this._getElement("tcv_box_content");
     this.cadTreeToggles = this._getElement("tcv_cad_tree_toggles");
     this.cadClip = this._getElement("tcv_cad_clip_container");
     this.cadMaterial = this._getElement("tcv_cad_material_container");
@@ -88,6 +89,8 @@ class Display {
     this.cadMaterial.style.display = "none";
     this.clipSliders = null;
     this.explodeFlag = false;
+
+    this.currentButton = null;
 
     this.lastPlaneState = false;
 
@@ -287,6 +290,11 @@ class Display {
 
     this.showPinning(options.pinning);
     // this.showMeasureTools(options.measureTools);
+
+    this.infoIcons = {
+      right: getIconSvg(theme, "nav_closed"),
+      down: getIconSvg(theme, "nav_open"),
+    };
   }
 
   _setupCheckEvent(name, fn, flag) {
@@ -501,6 +509,13 @@ class Display {
   }
 
   /**
+   * Get the DOM canvas element
+   */
+  getCanvas() {
+    return this.cadView.children[this.cadView.children.length - 1];
+  }
+
+  /**
    * Clear the Cad tree
    */
   clearCadTree() {
@@ -676,14 +691,19 @@ class Display {
    */
   setTool = (name, flag) => {
     this.viewer.toggleAnimationLoop(flag);
-    this.viewer.setPickHandler(!flag);
-    this.viewer.setRaycastMode(flag);
 
     if (flag) {
+      this.showAnimationControl(false);
       if (this.viewer.hasAnimation()) {
         this.viewer.backupAnimation();
       }
-
+      if (
+        ["distance", "properties", "angle"].includes(name) &&
+        !["distance", "properties", "angle"].includes(this.currentButton)
+      ) {
+        this.viewer.toggleGroup(true);
+      }
+      this.viewer.setRaycastMode(flag);
       this.shapeFilterDropDownMenu.setRaycaster(this.viewer.raycaster);
 
       if (name == "distance") {
@@ -696,15 +716,23 @@ class Display {
         this.viewer.cadTools.enable(ToolTypes.ANGLE);
         this.viewer.checkChanges({ activeTool: ToolTypes.ANGLE });
       }
+      this.currentButton = name;
     } else {
+      if (this.currentButton == name || name == "explode") {
+        this.viewer.toggleGroup(false);
+        this.currentButton = null;
+      }
       this.viewer.checkChanges({ activeTool: ToolTypes.NONE });
       this.viewer.clearSelection();
       if (this.viewer.hasAnimation()) {
         this.controlAnimationByName("stop");
         this.viewer.clearAnimation();
         this.viewer.restoreAnimation();
+        this.showAnimationControl(true);
       }
+      this.viewer.setRaycastMode(flag);
     }
+    this.viewer.setPickHandler(!flag);
     this.shapeFilterDropDownMenu.show(flag);
   };
 
@@ -1020,6 +1048,19 @@ class Display {
   }
 
   /**
+   * Toggle visibility of the clipping tab
+   * @function
+   */
+  toggleClippingTab = (flag) => {
+    if (flag) {
+      this.tabClip.removeAttribute("disabled");
+    } else {
+      this.tabClip.setAttribute("disabled", "true");
+    }
+    this.tabClip.classList.toggle("tcv_tab-disabled", !flag);
+  };
+
+  /**
    * Collapse nodes handler
    * @function
    * @param {Event} e - a DOM click event
@@ -1034,15 +1075,13 @@ class Display {
    */
   collapseNodes(value) {
     if (value === "1") {
-      this.viewer.treeview.expandNodes();
-      this.viewer.treeview.collapseNodes(1);
+      this.viewer.treeview.openLevel(-1);
     } else if (value === "R") {
-      this.viewer.treeview.expandNodes();
-      this.viewer.treeview.collapseNodes(3);
+      this.viewer.treeview.openLevel(1);
     } else if (value === "C") {
-      this.viewer.treeview.collapseNodes(2);
+      this.viewer.treeview.collapseAll();
     } else if (value === "E") {
-      this.viewer.treeview.expandNodes();
+      this.viewer.treeview.expandAll();
     }
   }
 
@@ -1195,7 +1234,10 @@ class Display {
    */
   showInfo = (flag) => {
     this.cadInfo.parentNode.parentNode.style.display = flag ? "block" : "none";
-    this._getElement("tcv_toggle_info").value = flag ? "\u25B2 i" : "\u25BC i";
+    // this._getElement("tcv_toggle_info").value = flag ? "\u25B2 i" : "\u25BC i";
+    this._getElement("tcv_toggle_info").innerHTML = flag
+      ? `${this.infoIcons["down"]}`
+      : `${this.infoIcons["right"]}`;
     this.info_shown = flag;
   };
 

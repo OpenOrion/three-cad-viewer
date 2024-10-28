@@ -298,9 +298,6 @@ class Measurement {
    */
   handleSelection = (selectedObj) => {
     this._hideMeasurement();
-    if (this.selectedShapes.length == this._getMaxObjSelected()) {
-      this.removeLastSelectedObj();
-    }
     if (
       this.selectedShapes.find((o) => o.obj.name === selectedObj.obj.name) !==
       undefined
@@ -370,15 +367,17 @@ class Measurement {
     this.panelDragData.y = e.clientY;
   };
 
-  removeLastSelectedObj() {
-    const lastItem = this.selectedShapes.pop();
-    if (lastItem) {
-      let objs = lastItem.objs();
-      for (let obj of objs) {
-        obj.clearHighlights();
+  removeLastSelectedObj(force = false) {
+    if (force || this.selectedShapes.length == this._getMaxObjSelected()) {
+      const lastItem = this.selectedShapes.pop();
+      if (lastItem) {
+        let objs = lastItem.objs();
+        for (let obj of objs) {
+          obj.clearHighlights();
+        }
       }
+      this._updateMeasurement();
     }
-    this._updateMeasurement();
   }
 
   /**
@@ -429,10 +428,12 @@ class DistanceMeasurement extends Measurement {
 
   _getPoints() {
     if (DEBUG) {
-      this.point1 =
-        this.selectedShapes[0].obj.children[0].geometry.boundingSphere.center;
-      this.point2 =
-        this.selectedShapes[1].obj.children[0].geometry.boundingSphere.center;
+      var obj1 = this.selectedShapes[0].obj;
+      var obj2 = this.selectedShapes[1].obj;
+      this.point1 = obj1.children[0].geometry.boundingSphere.center.clone();
+      this.point1 = obj1.localToWorld(this.point1);
+      this.point2 = obj2.children[0].geometry.boundingSphere.center.clone();
+      this.point2 = obj2.localToWorld(this.point2);
     } else {
       this.point1 = new Vector3(...this.responseData.point1);
       this.point2 = new Vector3(...this.responseData.point2);
@@ -440,7 +441,7 @@ class DistanceMeasurement extends Measurement {
   }
 
   _makeLines() {
-    const lineWidth = 0.0025;
+    const lineWidth = 1.5;
     const distanceLine = new DistanceLineArrow(
       this.coneLength,
       this.point1,
@@ -494,12 +495,12 @@ class PropertiesMeasurement extends Measurement {
     const subheader = isSolid
       ? "Solid"
       : isVertex
-      ? "Vertex"
-      : isLine
-      ? "Edge"
-      : isFace
-      ? "Face"
-      : "Unknown";
+        ? "Vertex"
+        : isLine
+          ? "Edge"
+          : isFace
+            ? "Face"
+            : "Unknown";
     this.panel.subheader = subheader;
     const debugProps = {
       volume: 0.44,
@@ -507,6 +508,7 @@ class PropertiesMeasurement extends Measurement {
       length: 2.01,
       width: 0.01,
       radius: 1.01,
+      radius2: 2.02,
       geom_type: "Circle",
       vertex_coords: [1.34, -4.34, 2.35],
       // volume: 44444.44,
@@ -526,11 +528,14 @@ class PropertiesMeasurement extends Measurement {
   }
 
   _makeLines() {
-    const lineWidth = 0.0025;
-
-    const middlePoint = DEBUG
-      ? this.selectedShapes[0].obj.children[0].geometry.boundingSphere.center
-      : this.responseData.center;
+    const lineWidth = 1.5;
+    var worldCenter;
+    if (DEBUG) {
+      const obj = this.selectedShapes[0].obj;
+      const center = obj.children[0].geometry.boundingSphere.center.clone();
+      worldCenter = obj.localToWorld(center);
+    }
+    const middlePoint = DEBUG ? worldCenter : this.responseData.center;
     const connectingLine = new DistanceLineArrow(
       this.coneLength,
       this.panelCenter,
@@ -589,10 +594,12 @@ class AngleMeasurement extends Measurement {
 
   _getPoints() {
     if (DEBUG) {
-      this.point1 =
-        this.selectedShapes[0].obj.children[0].geometry.boundingSphere.center;
-      this.point2 =
-        this.selectedShapes[1].obj.children[0].geometry.boundingSphere.center;
+      var obj1 = this.selectedShapes[0].obj;
+      var obj2 = this.selectedShapes[1].obj;
+      this.point1 = obj1.children[0].geometry.boundingSphere.center.clone();
+      this.point1 = obj1.localToWorld(this.point1);
+      this.point2 = obj2.children[0].geometry.boundingSphere.center.clone();
+      this.point2 = obj2.localToWorld(this.point2);
     } else {
       this.point1 = new Vector3(...this.responseData.point1);
       this.point2 = new Vector3(...this.responseData.point2);
@@ -600,7 +607,7 @@ class AngleMeasurement extends Measurement {
   }
 
   _makeLines() {
-    const lineWidth = 0.0025;
+    const lineWidth = 1.5;
     this._getPoints();
     const item1Line = new DistanceLineArrow(
       this.coneLength,

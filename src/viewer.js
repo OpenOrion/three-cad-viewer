@@ -16,6 +16,7 @@ import {
   sceneTraverse,
   KeyMapper,
   scaleLight,
+  flatten,
 } from "./utils.js";
 import { Controls } from "./controls.js";
 import { Camera } from "./camera.js";
@@ -72,7 +73,7 @@ class Viewer {
     this.scene = null;
     this.camera = null;
     this.orthographicCamera = null;
-    this.orthographicScene = null;
+    // this.orthographicScene = null;
     this.gridHelper = null;
     this.axesHelper = null;
     this.controls = null;
@@ -80,7 +81,7 @@ class Viewer {
     this.treeview = null;
     this.cadTools = new Tools(this);
     this.newTreeBehavior = options.newTreeBehavior;
-    this.hideAllExceptPicked = false;
+
     this.ready = false;
     this.mixer = null;
     this.animation = new Animation("|");
@@ -100,6 +101,7 @@ class Viewer {
     this.renderer = new THREE.WebGLRenderer({
       alpha: !this.dark,
       antialias: true,
+      stencil: true,
     });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.setSize(this.cadWidth, this.height);
@@ -108,6 +110,12 @@ class Viewer {
 
     this.lastNotification = {};
     this.lastBbox = null;
+
+    // measure supporting exploded shapes and compact shapes
+    this.expandedTree = null;
+    this.compactTree = null;
+    this.expandedNestedGroup = null;
+    this.compactNestedGroup = null;
 
     // If fromSolid is true, this means the selected object is from the solid
     // This is the obj that has been picked but the actual selected obj is the solid
@@ -130,6 +138,7 @@ class Viewer {
     console.debug("three-cad-viewer: WebGL Renderer created");
 
     this.display.setupUI(this);
+    window.viewer = this;
   }
 
   /**
@@ -207,7 +216,6 @@ class Viewer {
    * Enhance the given options for the view by default values.
    * @param {ViewOptions} options - The provided options object for the viewer.
    */
-
   setViewerDefaults(options) {
     this.axes = false;
     this.axes0 = false;
@@ -233,6 +241,7 @@ class Viewer {
     this.position = null;
     this.quaternion = null;
     this.target = null;
+    this.measureTools = true;
 
     this.zoom = 1;
 
@@ -304,7 +313,7 @@ class Viewer {
    * @param {Shapes} shapes - The Shapes object representing the tessellated CAD object.
    * @returns {THREE.Group} A nested THREE.Group object.
    */
-  _renderTessellatedShapes(shapes, states) {
+  _renderTessellatedShapes(shapes) {
     const nestedGroup = new NestedGroup(
       shapes,
       this.cadWidth,
@@ -319,51 +328,41 @@ class Viewer {
     if (shapes.bb) {
       this.bbox = new BoundingBox(
         new THREE.Vector3(shapes.bb.xmin, shapes.bb.ymin, shapes.bb.zmin),
-        new THREE.Vector3(shapes.bb.xmax, shapes.bb.ymax, shapes.bb.zmax)
+        new THREE.Vector3(shapes.bb.xmax, shapes.bb.ymax, shapes.bb.zmax),
       );
     }
-    nestedGroup.render(states);
+    nestedGroup.render();
     return nestedGroup;
   }
 
   /**
    * Retrieve the navigation tree from a Shapes object.
    * @param {Shapes} shapes - The Shapes object.
-   * @param {States} states - the visibility state of meshes and edges
    * @returns {NavTree} The navigation tree object.
    */
-  _getTree(shapes, states) {
-    const delim = "/";
-
-    const _getTree = (subGroup, path) => {
-      const newPath = `${path}${delim}${subGroup.name}`;
-      var result = {
-        name: subGroup.name,
-        id: newPath,
-      };
-      if (subGroup.parts) {
-        result.type = "node";
-        result.children = [];
-        for (var part of subGroup.parts) {
-          result.children.push(_getTree(part, newPath));
+  _getTree(shapes) {
+    const _getTree = (parts) => {
+      var result = {};
+      for (var part of parts) {
+        if (part.parts != null) {
+          result[part.name] = _getTree(part.parts);
+        } else {
+          result[part.name] = part.state;
         }
-      } else {
-        result.type = "leaf";
-        result.states = states[newPath];
       }
       return result;
     };
-
-    return _getTree(shapes, "");
+    var tree = {};
+    tree[shapes.name] = _getTree(shapes.parts);
+    return tree;
   }
 
   /**
    * Decompose a CAD object into faces, edges and vertices.
    * @param {Shapes} shapes - The Shapes object.
-   * @param {States} states - the visibility state of meshes and edges
    * @returns {Shapes} A decomposed Shapes object.
    */
-  _decompose(part, states) {
+  _decompose(part) {
     const shape = part.shape;
     var j;
 
@@ -383,11 +382,16 @@ class Viewer {
       var triangles;
       const vertices = shape.vertices;
       const normals = shape.normals;
-      const num = (shape.triangles_per_face) ? shape.triangles_per_face.length : shape.triangles.length;
+      const num = shape.triangles_per_face
+        ? shape.triangles_per_face.length
+        : shape.triangles.length;
       var current = 0;
       for (j = 0; j < num; j++) {
         if (shape.triangles_per_face) {
-          triangles = shape.triangles.subarray(current, current + 3 * shape.triangles_per_face[j]);
+          triangles = shape.triangles.subarray(
+            current,
+            current + 3 * shape.triangles_per_face[j],
+          );
           current += 3 * shape.triangles_per_face[j];
         } else {
           triangles = shape.triangles[j];
@@ -414,11 +418,13 @@ class Viewer {
           type: "shapes",
           color: part.color,
           alpha: part.alpha,
-          renderBack: false,
+          renderback: true,
+          state: [1, 3],
           accuracy: part.accuracy,
           bb: {},
           geomtype: shape.face_types[j],
           subtype: part.subtype,
+          exploded: true,
           shape: {
             triangles: [...Array(triangles.length).keys()],
             vertices: vecs,
@@ -426,8 +432,10 @@ class Viewer {
             edges: [],
           },
         };
+        if (part.texture) {
+          new_shape.texture = part.texture;
+        }
         new_part.parts.push(new_shape);
-        states[new_shape.id] = [1, 3];
       }
 
       part.parts.push(new_part);
@@ -448,12 +456,17 @@ class Viewer {
         Array.isArray(part.color) && part.color.length == shape.edges.length;
       var color;
 
-      const num = (shape.segments_per_edge) ? shape.segments_per_edge.length : shape.triangles.length;
+      const num = shape.segments_per_edge
+        ? shape.segments_per_edge.length
+        : shape.edges.length;
       current = 0;
       var edge;
       for (j = 0; j < num; j++) {
         if (shape.segments_per_edge) {
-          edge = shape.edges.subarray(current, current + 6 * shape.segments_per_edge[j]);
+          edge = shape.edges.subarray(
+            current,
+            current + 6 * shape.segments_per_edge[j],
+          );
           current += 6 * shape.segments_per_edge[j];
         } else {
           edge = shape.edges[j];
@@ -468,16 +481,17 @@ class Viewer {
           id: `${part.id}/edges/edges_${j}`,
           type: "edges",
           color: part.type == "shapes" ? this.edgeColor : color,
+          state: [3, 1],
           width: part.type == "shapes" ? 1 : part.width,
           bb: {},
           geomtype: shape.edge_types[j],
           shape: { edges: edge },
         };
         new_part.parts.push(new_shape);
-        states[new_shape.id] = [3, 1];
       }
-
-      part.parts.push(new_part);
+      if (new_part.parts.length > 0) {
+        part.parts.push(new_part);
+      }
     }
 
     // decompose vertices
@@ -504,6 +518,7 @@ class Viewer {
           part.type == "shapes" || part.type == "edges"
             ? this.edgeColor
             : part.color,
+        state: [3, 1],
         size: part.type == "shapes" || part.type == "edges" ? 4 : part.size,
         bb: {},
         shape: {
@@ -515,55 +530,96 @@ class Viewer {
         },
       };
       new_part.parts.push(new_shape);
-      states[new_shape.id] = [3, 1];
     }
-
-    part.parts.push(new_part);
-
+    if (new_part.parts.length > 0) {
+      part.parts.push(new_part);
+    }
     delete part.shape;
     delete part.color;
     delete part.alpha;
     delete part.accuracy;
     delete part.renderBack;
-    delete states[part.id];
 
     return part;
   }
 
   /**
    * Render the shapes of the CAD object.
+   * @param {boolean} exploded - Whether to render the compact or exploded version
    * @param {Shapes} shapes - The Shapes object.
-   * @param {States} states - the visibility state of meshes and edges
-   * @param {RenderOptions} options - the options for rendering
    * @returns {THREE.Group} A nested THREE.Group object.
    */
-  renderTessellatedShapes(shapes, states, options) {
-    this.setRenderDefaults(options);
-    const _render = (shapes, states, measureTools) => {
+  renderTessellatedShapes(exploded, shapes) {
+    const _convertArrays = (shape) => {
+      if (shape.triangles != null && !(shape.triangles instanceof Uint32Array))
+        shape.triangles = new Uint32Array(shape.triangles);
+      if (shape.edges != null && !(shape.edges instanceof Float32Array))
+        shape.edges = new Float32Array(flatten(shape.edges, 3));
+      if (shape.vertices != null && !(shape.vertices instanceof Float32Array))
+        shape.vertices = new Float32Array(shape.vertices);
+      if (shape.normals != null && !(shape.normals instanceof Float32Array))
+        shape.normals = new Float32Array(flatten(shape.normals, 2));
+      if (
+        shape.obj_vertices != null &&
+        !(shape.obj_vertices instanceof Float32Array)
+      )
+        shape.obj_vertices = new Float32Array(shape.obj_vertices);
+      if (
+        shape.face_types != null &&
+        !(shape.face_types instanceof Uint32Array)
+      )
+        shape.face_types = new Uint32Array(shape.face_types);
+      if (
+        shape.edge_types != null &&
+        !(shape.edge_types instanceof Uint32Array)
+      )
+        shape.edge_types = new Uint32Array(shape.edge_types);
+      if (
+        shape.triangles_per_face != null &&
+        !(shape.triangles_per_face instanceof Uint32Array)
+      )
+        shape.triangles_per_face = new Uint32Array(shape.triangles_per_face);
+      if (
+        shape.segments_per_edge != null &&
+        !(shape.segments_per_edge instanceof Uint32Array)
+      )
+        shape.segments_per_edge = new Uint32Array(shape.segments_per_edge);
+    };
+    const _render = (shapes) => {
       var part;
       if (shapes.version == 2 || shapes.version == 3) {
-        if (measureTools) {
-          var i, tmp;
-          let parts = [];
-          for (i = 0; i < shapes.parts.length; i++) {
-            part = shapes.parts[i];
-            if (part.parts != null) {
-              tmp = _render(part, states, options);
-              parts.push(tmp);
-            } else {
-              parts.push(this._decompose(part, states));
-            }
+        var i, tmp;
+        let parts = [];
+        for (i = 0; i < shapes.parts.length; i++) {
+          part = shapes.parts[i];
+          if (part.shape != null) {
+            _convertArrays(part.shape);
           }
-          shapes.parts = parts;
+          if (part.parts != null) {
+            tmp = _render(part);
+            parts.push(tmp);
+          } else {
+            parts.push(this._decompose(part));
+          }
         }
+        shapes.parts = parts;
       }
       return shapes;
     };
-    shapes = _render(shapes, states, options.measureTools);
-    return [
-      this._renderTessellatedShapes(shapes, states),
-      this._getTree(shapes, states),
-    ];
+
+    var exploded_shapes;
+    if (exploded) {
+      exploded_shapes = _render(structuredClone(shapes));
+    } else {
+      exploded_shapes = structuredClone(shapes);
+    }
+    var nested_group = this._renderTessellatedShapes(exploded_shapes);
+    var rendered_tree = this._getTree(exploded_shapes);
+
+    return {
+      group: nested_group,
+      tree: rendered_tree,
+    };
   }
 
   // - - - - - - - - - - - - - - - - - - - - - - - -
@@ -669,6 +725,13 @@ class Viewer {
     if (notify && this.notifyCallback && Object.keys(changed).length) {
       this.notifyCallback(changed);
     }
+  };
+
+  /**
+   * Notifies the states by checking for changes and passing the states to the checkChanges method.
+   */
+  notifyStates = () => {
+    this.checkChanges({ states: this.getStates() }, true);
   };
 
   /**
@@ -850,38 +913,184 @@ class Viewer {
   // - - - - - - - - - - - - - - - - - - - - - - - -
 
   /**
-   * Render a CAD object and build the navigation tree
-   * @param {NestedGroup} nestedgroup - the shapes of the CAD object to be rendered
-   * @param {NavTree} tree - The navigation tree object
-   * @param {States} states - the visibility state of meshes and edges
-   * @param {ViewerOptions} options - the Viewer options
+   * Synchronizes the states of two tree structures recursively.
+   *
+   * @param {Array|Object} compactTree - The compact tree structure.
+   * @param {Array|Object} expandedTree - The expanded tree structure.
+   * @param {string} path - The current path in the tree structure.
    */
-  render(group, tree, states, options) {
-    this.setViewerDefaults(options);
+  syncTreeStates = (compactTree, expandedTree, exploded, path) => {
+    if (Array.isArray(compactTree)) {
+      if (exploded) {
+        for (var t in expandedTree) {
+          for (var l in expandedTree[t]) {
+            const id = `${path}/${t}/${l}`;
+            const objectGroup = this.expandedNestedGroup.groups[id];
+            for (var i of [0, 1]) {
+              if (i == 0) {
+                objectGroup.setShapeVisible(compactTree[0] == 1);
+              } else {
+                objectGroup.setEdgesVisible(compactTree[1] == 1);
+              }
+              if (expandedTree[t][l][i] != 3) {
+                expandedTree[t][l][i] = compactTree[i];
+              }
+            }
+          }
+        }
+      } else {
+        const objectGroup = this.compactNestedGroup.groups[path];
+        for (var i of [0, 1]) {
+          var visible = false;
+          for (var t in expandedTree) {
+            for (var l in expandedTree[t]) {
+              if (expandedTree[t][l][i] == 1) {
+                visible = true;
+              }
+            }
+          }
+          if (i == 0) {
+            objectGroup.setShapeVisible(visible);
+          } else {
+            objectGroup.setEdgesVisible(visible);
+          }
+          if (compactTree[i] != 3) {
+            compactTree[i] = visible ? 1 : 0;
+          }
+        }
+      }
+    } else {
+      for (var key in compactTree) {
+        var id = `${path}/${key}`;
+        this.syncTreeStates(compactTree[key], expandedTree[key], exploded, id);
+      }
+    }
+  };
+
+  /**
+   * Toggle the two version of the NestedGroup
+   * @param expanded - whether to render the exploded or compact version
+   */
+  toggleGroup(expanded) {
+    var timer = new Timer("toggleGroup", this.timeit);
+    var _config = () => {
+      this.nestedGroup.setTransparent(this.transparent);
+      this.nestedGroup.setBlackEdges(this.blackEdges);
+      this.nestedGroup.setMetalness(this.metalness);
+      this.nestedGroup.setRoughness(this.roughness);
+      this.nestedGroup.setPolygonOffset(2);
+    };
+
+    if (
+      (this.compactNestedGroup == null && !expanded) ||
+      (this.expandedNestedGroup == null && expanded)
+    ) {
+      this.setRenderDefaults(this.renderOptions);
+      var result;
+      if (expanded) {
+        if (this.expandedNestedGroup == null) {
+          result = this.renderTessellatedShapes(expanded, this.shapes);
+          this.nestedGroup = result["group"];
+          this.expandedNestedGroup = result["group"];
+          _config();
+          this.expandedTree = result["tree"];
+        }
+      } else {
+        if (this.compactNestedGroup == null) {
+          result = this.renderTessellatedShapes(expanded, this.shapes);
+          this.nestedGroup = result["group"];
+          this.compactNestedGroup = result["group"];
+          _config();
+          this.compactTree = result["tree"];
+        }
+      }
+      timer.split(`rendered${expanded ? " exploded" : " compact"} shapes`);
+    } else {
+      this.nestedGroup = expanded
+        ? this.expandedNestedGroup
+        : this.compactNestedGroup;
+      _config();
+    }
+
+    // only sync if both trees exist
+    if (this.expandedTree) {
+      this.syncTreeStates(this.compactTree, this.expandedTree, expanded, "");
+    }
+    timer.split("synched tree states");
+
+    this.tree = expanded ? this.expandedTree : this.compactTree;
+    this.scene.children[0] = this.nestedGroup.rootGroup;
+    timer.split("added shapes to scene");
+
+    this.treeview = new TreeView(
+      this.tree,
+      this.display.cadTreeScrollContainer,
+      this.setObject,
+      this.handlePick,
+      this.update,
+      this.notifyStates,
+      this.theme,
+      this.newTreeBehavior,
+      false,
+    );
+
+    this.display.clearCadTree();
+    const t = this.treeview.create();
+    timer.split("created tree");
+
+    this.display.addCadTree(t);
+    this.treeview.render();
+    timer.split("rendered tree");
+
+    this.display.selectTabByName("tree");
+    timer.split("collapse tree");
+    switch (this.collapse) {
+      case 0:
+        this.treeview.expandAll();
+        break;
+      case 1:
+        this.treeview.openLevel(-1);
+        break;
+      case 2:
+        this.treeview.collapseAll();
+        break;
+
+      case 3:
+        this.treeview.openLevel(1);
+        break;
+      default:
+        break;
+    }
+    this.checkChanges({ states: this.getStates() }, true);
+    timer.split("notify state changes");
+    timer.stop();
+    this.display.toggleClippingTab(!expanded);
+  }
+
+  /**
+   * Render a CAD object and build the navigation tree
+   * @param {Shapes} shapes - the Shapes object representing the tessellated CAD object
+   * @param {ViewerOptions} viewerOptions - the viewer options
+   * @param {RenderOptions} renderOptions - the render options
+   */
+  render(shapes, renderOptions, viewerOptions) {
+    this.shapes = shapes;
+    this.renderOptions = renderOptions;
+    this.setViewerDefaults(viewerOptions);
 
     this.animation.cleanBackup();
 
     const timer = new Timer("viewer", this.timeit);
 
-    this.states = states;
     this.scene = new THREE.Scene();
-    this.orthographicScene = new THREE.Scene();
+    // this.orthographicScene = new THREE.Scene();
 
     //
-    // render the input assembly
+    // add shapes and cad tree
     //
-    this.lastBbox = null;
 
-    this.nestedGroup = group;
-    this.scene.add(this.nestedGroup.render(states));
-
-    this.nestedGroup.setTransparent(this.transparent);
-    this.nestedGroup.setBlackEdges(this.blackEdges);
-    this.nestedGroup.setMetalness(this.metalness);
-    this.nestedGroup.setRoughness(this.roughness);
-    this.nestedGroup.setPolygonOffset(2);
-
-    timer.split("rendered nested group");
+    this.toggleGroup(false);
+    timer.split("scene and tree done");
 
     if (!this.bbox) {
       this.bbox = this.nestedGroup.boundingBox();
@@ -899,7 +1108,7 @@ class Viewer {
     // add Info box
     //
 
-    this.info = new Info(this.display.cadInfo);
+    this.info = new Info(this.display.cadInfo, this.theme);
 
     //
     // create cameras
@@ -908,9 +1117,9 @@ class Viewer {
       this.cadWidth,
       this.height,
       this.bb_radius,
-      options.target == null ? this.bbox.center() : options.target,
+      viewerOptions.target == null ? this.bbox.center() : viewerOptions.target,
       this.ortho,
-      options.up,
+      viewerOptions.up,
     );
 
     // this.orthographicCamera = new THREE.OrthographicCamera(
@@ -937,7 +1146,7 @@ class Viewer {
     this.controls = new Controls(
       this.control,
       this.camera.getCamera(),
-      options.target == null ? this.bbox.center() : options.target,
+      viewerOptions.target == null ? this.bbox.center() : viewerOptions.target,
       this.renderer.domElement,
       this.rotateSpeed,
       this.zoomSpeed,
@@ -949,12 +1158,17 @@ class Viewer {
     this.controls.controls.screenSpacePanning = true;
 
     // this needs to happen after the controls have been established
-    if (options.position == null && options.quaternion == null) {
+    if (viewerOptions.position == null && viewerOptions.quaternion == null) {
       this.presetCamera("iso", this.zoom);
       this.display.highlightButton("iso");
-    } else if (options.position != null) {
-      this.setCamera(false, options.position, options.quaternion, this.zoom);
-      if (options.quaternion == null) {
+    } else if (viewerOptions.position != null) {
+      this.setCamera(
+        false,
+        viewerOptions.position,
+        viewerOptions.quaternion,
+        this.zoom,
+      );
+      if (viewerOptions.quaternion == null) {
         this.camera.lookAtTarget();
       }
     } else {
@@ -999,7 +1213,7 @@ class Viewer {
       this.centerGrid,
       this.axes0,
       this.grid,
-      options.up == "Z",
+      viewerOptions.up == "Z",
       this.theme,
     );
     this.gridHelper.computeGrid();
@@ -1058,22 +1272,30 @@ class Viewer {
 
     this.display.setSliderLimits(this.gridSize / 2, this.bbox.center());
 
-    this.setClipNormal(0, options.clipNormal0, true);
-    this.setClipNormal(1, options.clipNormal1, true);
-    this.setClipNormal(2, options.clipNormal2, true);
+    this.setClipNormal(0, viewerOptions.clipNormal0, true);
+    this.setClipNormal(1, viewerOptions.clipNormal1, true);
+    this.setClipNormal(2, viewerOptions.clipNormal2, true);
 
-    this.clipSlider0 = (options.clipSlider0 != null) ? (options.clipSlider0) : this.gridSize / 2;
-    this.clipSlider1 = (options.clipSlider1 != null) ? (options.clipSlider1) : this.gridSize / 2;
-    this.clipSlider2 = (options.clipSlider2 != null) ? (options.clipSlider2) : this.gridSize / 2;
+    this.clipSlider0 =
+      viewerOptions.clipSlider0 != null
+        ? viewerOptions.clipSlider0
+        : this.gridSize / 2;
+    this.clipSlider1 =
+      viewerOptions.clipSlider1 != null
+        ? viewerOptions.clipSlider1
+        : this.gridSize / 2;
+    this.clipSlider2 =
+      viewerOptions.clipSlider2 != null
+        ? viewerOptions.clipSlider2
+        : this.gridSize / 2;
 
     this.setClipSlider(0, this.clipSlider0, true);
     this.setClipSlider(1, this.clipSlider1, true);
     this.setClipSlider(2, this.clipSlider2, true);
 
-
-    this.setClipIntersection(options.clipIntersection, true);
-    this.setClipObjectColorCaps(options.clipObjectColors, true);
-    this.setClipPlaneHelpersCheck(options.clipPlaneHelpers, true);
+    this.setClipIntersection(viewerOptions.clipIntersection, true);
+    this.setClipObjectColorCaps(viewerOptions.clipObjectColors, true);
+    this.setClipPlaneHelpersCheck(viewerOptions.clipPlaneHelpers, true);
 
     this.scene.add(this.clipping.planeHelpers);
     this.nestedGroup.setClipPlanes(this.clipping.clipPlanes);
@@ -1089,8 +1311,8 @@ class Viewer {
 
     const theme =
       this.theme === "dark" ||
-        (this.theme === "browser" &&
-          window.matchMedia("(prefers-color-scheme: dark)").matches)
+      (this.theme === "browser" &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches)
         ? "dark"
         : "light";
 
@@ -1105,25 +1327,6 @@ class Viewer {
       theme,
     );
     this.orientationMarker.create();
-
-    //
-    // build tree view
-    //
-
-    this.tree = tree;
-    this.treeview = new TreeView(
-      clone(this.states),
-      this.tree,
-      this.setObjects,
-      this.handlePick,
-      theme,
-      this.newTreeBehavior,
-    );
-
-    this.display.addCadTree(this.treeview.render(options.collapse));
-    this.display.selectTabByName("tree");
-
-    timer.split("scene done");
 
     //
     // update UI elements
@@ -1141,8 +1344,6 @@ class Viewer {
     timer.split("ui updated");
     this.display.autoCollapse();
 
-    // ensure all for all deselected objects the stencil planes are invisible
-    this.setObjects(this.states, true, true);
     timer.split("stencil done");
     //
     // show the rendering
@@ -1150,7 +1351,7 @@ class Viewer {
 
     this.toggleAnimationLoop(this.hasAnimationLoop);
 
-    this.display.showMeasureTools(options.measureTools);
+    this.display.showMeasureTools(viewerOptions.measureTools);
 
     this.ready = true;
     this.info.readyMsg(this.gridHelper.ticks, this.control);
@@ -1172,6 +1373,7 @@ class Viewer {
     timer.split("notification done");
 
     this.update(true, false);
+    this.treeview.update();
     timer.split("update done");
     timer.stop();
   }
@@ -1277,11 +1479,11 @@ class Viewer {
   }
 
   /**
-   * Reset zoom to the initiale value
+   * Reset zoom to 1.0
    * @function
    */
   resize = () => {
-    this.camera.setZoom(this.controls.getZoom0());
+    this.camera.setZoom(1.0);
     this.camera.updateProjectionMatrix();
     this.update(true);
   };
@@ -1305,35 +1507,42 @@ class Viewer {
   }
 
   /**
-   * Set the rendered shape visibility state according to the states map
-   * @function
-   * @param {States} states
-   * @param {boolean} [notify=true] - whether to send notification or not.
+   * Sets the visibility state of an object in the viewer.
+   *
+   * @param {string} path - The path of the object.
+   * @param {number} state - The visibility state (0 or 1).
+   * @param {number} iconNumber - The icon number.
+   * @param {boolean} [notify=true] - Whether to notify the changes.
    */
-  setObjects = (states, force = false, notify = true) => {
-    for (var key in this.states) {
-      var oldState = this.states[key];
-      var newState = states[key];
-      var objectGroup = this.nestedGroup.groups[key];
-      if (force || oldState[0] != newState[0]) {
-        objectGroup.setShapeVisible(newState[0] === 1);
-        this.states[key][0] = newState[0];
+  setObject = (path, state, iconNumber, notify = true, update = true) => {
+    var objectGroup = this.nestedGroup.groups[path];
+    if (objectGroup != null && objectGroup instanceof ObjectGroup) {
+      if (iconNumber == 0) {
+        objectGroup.setShapeVisible(state === 1);
+      } else {
+        objectGroup.setEdgesVisible(state === 1);
       }
-      if (oldState[1] != newState[1]) {
-        objectGroup.setEdgesVisible(newState[1] === 1);
-        this.states[key][1] = newState[1];
+      if (notify) {
+        const state = {};
+        state[path] = this.getState(path);
+      }
+      if (update) {
+        this.update(this.updateMarker);
       }
     }
-
-    this.checkChanges({ states: states }, notify);
-
-    this.update(this.updateMarker);
   };
 
+  /**
+   * Sets the bounding box for a given ID.
+   * @param {string} id - The ID of the group.
+   */
   setBoundingBox = (id) => {
-    const group = this.nestedGroup.groups[id];
-
+    var group = this.nestedGroup.groups[id];
     if (group != null) {
+      // ignore planeMesh group of root object
+      var planeMeshGroup = group.children[group.children.length - 1];
+      group.children = group.children.slice(0, group.children.length - 1);
+
       if (this.lastBbox != null) {
         this.scene.remove(this.lastBbox.bbox);
       }
@@ -1350,6 +1559,10 @@ class Viewer {
       } else {
         this.lastBbox = null;
       }
+
+      // add back planeMesh group
+      group.children.push(planeMeshGroup);
+
       this.update(false, false, false);
     }
   };
@@ -1411,12 +1624,10 @@ class Viewer {
    * @function
    * @param {string} id - object id
    * @param {number[]} state - 2 dim array [mesh, edges] = [0/1, 0/1]
-   * @param {boolean} [notify=true] - whether to send notification or not.
+   * @p^aram {boolean} [notify=true] - whether to send notification or not.
    */
   setState = (id, state, nodeType = "leaf", notify = true) => {
-    [0, 1].forEach((i) =>
-      this.treeview.handleStateChange(nodeType, id, i, state[i]),
-    );
+    this.treeview.setState(id, state);
     this.update(this.updateMarker, notify);
   };
 
@@ -1424,7 +1635,6 @@ class Viewer {
     if (this.lastBbox != null) {
       this.scene.remove(this.lastBbox.bbox);
       this.lastBbox = null;
-      this.treeview.removeLabelHighlight();
     }
   }
 
@@ -1436,25 +1646,24 @@ class Viewer {
    * @param {boolean} - meta key pressed
    * @param {boolean} shift - whether to send notification or not.
    */
-  handlePick = (
-    path,
-    name,
-    meta,
-    shift,
-    nodeType = "leaf",
-    highlight = true,
-  ) => {
+  handlePick = (path, name, meta, shift, alt, point, nodeType = "leaf") => {
     const id = `${path}/${name}`;
     const object = this.nestedGroup.groups[id];
-    const boundingBox = new BoundingBox().setFromObject(object, true);
+    var boundingBox;
+    if (object.parent != null) {
+      boundingBox = new BoundingBox().setFromObject(object, true);
+    } else {
+      // ignore PlaneMesh group
+      boundingBox = new BoundingBox();
+      for (var i = 0; i < object.children.length - 1; i++) {
+        boundingBox = boundingBox.expandByObject(object.children[i]);
+      }
+    }
 
     if (this.lastBbox != null && this.lastBbox.id === id && !meta && !shift) {
       this.removeLastBbox();
+      this.treeview.toggleLabelColor(null, id);
     } else {
-      if (highlight) {
-        this.treeview.selectNode(id);
-      }
-
       this.checkChanges({
         lastPick: {
           path: path,
@@ -1468,19 +1677,25 @@ class Viewer {
         this.bboxNeedsUpdate = true;
       }
 
-      if (shift || this.hideAllExceptPicked) {
+      if (shift && meta) {
+        this.removeLastBbox();
+        this.treeview.openPath(id);
+        this.setCameraTarget(point);
+        this.info.centerInfo(center);
+      } else if (shift) {
         this.removeLastBbox();
         this.treeview.hideAll();
         this.setState(id, [1, 1], nodeType);
         const center = boundingBox.center();
-        this.controls.setTarget(new THREE.Vector3(...center));
+        this.treeview.openPath(id);
+        this.setCameraTarget(new THREE.Vector3(...center));
         this.info.centerInfo(center);
       } else if (meta) {
         this.setState(id, [0, 0], nodeType);
-      }
-      else {
+      } else {
         this.info.bbInfo(path, name, boundingBox);
         this.setBoundingBox(id);
+        this.treeview.openPath(id);
       }
     }
     this.update(true);
@@ -1512,7 +1727,7 @@ class Viewer {
       this.bb_max / 30,
       this.scene.children.slice(0, 1),
       // eslint-disable-next-line no-unused-vars
-      (ev) => { },
+      (ev) => {},
     );
     raycaster.init();
     raycaster.onPointerMove(e);
@@ -1535,6 +1750,8 @@ class Viewer {
         nearest.name,
         KeyMapper.get(e, "meta"),
         KeyMapper.get(e, "shift"),
+        KeyMapper.get(e, "alt"),
+        nearestObj.point,
       );
     }
     raycaster.dispose();
@@ -1567,10 +1784,17 @@ class Viewer {
       let objs = this.lastSelection.objs();
       for (let obj of objs) {
         obj.unhighlight(false);
+        this.treeview.toggleLabelColor(
+          null,
+          obj.name.replaceAll(this.nestedGroup.delim, "/"),
+        );
       }
       this.lastSelection = null;
 
       this.cadTools.handleRemoveLastSelection();
+      this.lastObject = null;
+    } else {
+      this.cadTools.handleRemoveLastSelection(true);
     }
   };
 
@@ -1604,7 +1828,9 @@ class Viewer {
       for (var object of objects) {
         {
           const objectGroup = object.object.parent;
-          if (objectGroup !== this.lastObject) {
+          var name = objectGroup ? objectGroup.name : null;
+          var last_name = this.lastObject ? this.lastObject.obj.name : null;
+          if (name != null && name !== last_name) {
             this._releaseLastSelected(false);
             const fromSolid = this.raycaster.filters.topoFilter.includes(
               TopoFilter.solid,
@@ -1620,7 +1846,9 @@ class Viewer {
         }
       }
     } else {
-      this._releaseLastSelected(true);
+      if (this.lastObject != null) {
+        this._releaseLastSelected(true);
+      }
     }
   };
 
@@ -1644,7 +1872,18 @@ class Viewer {
             for (let obj of objs) {
               obj.toggleSelection();
             }
+            if (this.lastSelection?.obj.name != this.lastObject.obj.name) {
+              this.cadTools.handleRemoveLastSelected();
+            }
             this.cadTools.handleSelectedObj(this.lastObject);
+            if (event.shift) {
+              this.treeview.openPath(
+                this.lastObject.obj.name.replaceAll(
+                  this.nestedGroup.delim,
+                  "/",
+                ),
+              );
+            }
             this.lastSelection = this.lastObject;
           }
           break;
@@ -2038,7 +2277,7 @@ class Viewer {
   /**
    * Set the intensity of ambient light
    * @function
-   * @param {States} states
+   * @param {number} val - the new ambient light intensity
    * @param {boolean} [notify=true] - whether to send notification or not.
    */
   setAmbientLight = (val, notify = true) => {
@@ -2058,7 +2297,7 @@ class Viewer {
   /**
    * Set the intensity of directional light
    * @function
-   * @param {States} states
+   * @param {number} val - the new direct light intensity
    * @param {boolean} [notify=true] - whether to send notification or not.
    */
   setDirectLight = (val, notify = true) => {
@@ -2070,10 +2309,9 @@ class Viewer {
 
   /**
    * Get states of a treeview leafs.
-   * @returns {States} states value.
    **/
   getStates() {
-    return this.states;
+    return this.treeview.getStates();
   }
 
   /**
@@ -2084,23 +2322,16 @@ class Viewer {
    **/
   getState(path) {
     var p = path.replaceAll("|", "/");
-    return this.getStates()[p];
+    return this.treeview.getState(p);
   }
 
   /**
    * Set states of a treeview leafs
    * @function
-   * @param {States} - states
+   * @param {dict} - states
    */
-  setStates = (states, notify = true) => {
-    for (var id in states) {
-      if (
-        states[id][0] != this.states[id][0] ||
-        states[id][1] != this.states[id][1]
-      ) {
-        this.setState(id, states[id], "leaf", notify);
-      }
-    }
+  setStates = (states) => {
+    this.treeview.setStates(states);
   };
 
   /**
@@ -2189,7 +2420,9 @@ class Viewer {
         for (var capPlane of child.children) {
           if (flag) {
             capPlane.material.clippingPlanes =
-              this.clipping.reverseClipPlanes.filter((_, j) => j !== capPlane.index);
+              this.clipping.reverseClipPlanes.filter(
+                (_, j) => j !== capPlane.index,
+              );
           } else {
             capPlane.material.clippingPlanes = this.clipping.clipPlanes.filter(
               (_, j) => j !== capPlane.index,
@@ -2204,7 +2437,9 @@ class Viewer {
         for (var helper of child.children) {
           if (flag) {
             helper.material.clippingPlanes =
-              this.clipping.reverseClipPlanes.filter((_, j) => j !== helper.index);
+              this.clipping.reverseClipPlanes.filter(
+                (_, j) => j !== helper.index,
+              );
           } else {
             helper.material.clippingPlanes = this.clipping.clipPlanes.filter(
               (_, j) => j !== helper.index,
@@ -2399,35 +2634,56 @@ class Viewer {
    * Note: Only the canvas will be shown, no tools and orientation marker
    */
   pinAsPng = () => {
-    const children = this.display.cadView.children;
-    const canvas = children[children.length - 1];
-    this.renderer.setViewport(0, 0, this.cadWidth, this.height);
-    this.renderer.render(this.scene, this.camera.getCamera());
-    canvas.toBlob((blob) => {
-      let reader = new FileReader();
-      const scope = this;
-      reader.addEventListener(
-        "load",
-        function () {
-          var image = document.createElement("img");
-          image.width = scope.cadWidth;
-          image.height = scope.height;
-          image.src = reader.result;
-          if (scope.pinAsPngCallback == null) {
-            // default, replace the elements of the container with the image
-            for (var c of scope.display.container.children) {
-              scope.display.container.removeChild(c);
-            }
-            scope.display.container.appendChild(image);
-          } else {
-            // let callbackl handle the image placement
-            scope.pinAsPngCallback(image);
-          }
-        },
-        false,
-      );
-      reader.readAsDataURL(blob);
+    const screenshot = this.getImage("screenshot");
+    screenshot.then((data) => {
+      var image = document.createElement("img");
+      image.width = this.cadWidth;
+      image.height = this.height;
+      image.src = data.dataUrl;
+      if (this.pinAsPngCallback == null) {
+        // default, replace the elements of the container with the image
+        for (var c of this.display.container.children) {
+          this.display.container.removeChild(c);
+        }
+        this.display.container.appendChild(image);
+      }
     });
+  };
+
+  /**
+   * Get the current canvas as png data.
+   * @function
+   * @param {string} taksId - and id to identify the screenshot
+   * Note: Only the canvas will be shown, no tools and orientation marker
+   */
+  getImage = (taskId) => {
+    // canvas.toBlob can be very slow when anmation loop is off!
+    const animationLoop = this.hasAnimationLoop;
+    if (!animationLoop) {
+      this.toggleAnimationLoop(true);
+    }
+    let result = new Promise((resolve, reject) => {
+      const canvas = this.display.getCanvas();
+      this.renderer.setViewport(0, 0, this.cadWidth, this.height);
+      this.renderer.render(this.scene, this.camera.getCamera());
+      canvas.toBlob((blob) => {
+        let reader = new FileReader();
+        reader.addEventListener(
+          "load",
+          () => {
+            resolve({ task: taskId, dataUrl: reader.result });
+            // set animation loop back to the stored value
+            if (!animationLoop) {
+              this.toggleAnimationLoop(false);
+            }
+          },
+          false,
+        );
+        reader.readAsDataURL(blob);
+      });
+    });
+
+    return result;
   };
 
   /**
