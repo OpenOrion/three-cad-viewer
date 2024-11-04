@@ -44,19 +44,19 @@ class ObjectGroup extends THREE.Group {
   }
 
   widen(flag) {
-    if (this.types.vertices) {
-      this.types.vertices.material.size = flag
-        ? this.vertexFocusSize
-        : this.isSelected
-          ? this.vertexFocusSize - 2
-          : this.originalWidth;
-    } else if (this.types.edges) {
-      this.types.edges.material.linewidth = flag
-        ? this.edgeFocusWidth
-        : this.isSelected
-          ? this.edgeFocusWidth - 2
-          : this.originalWidth;
-    }
+    // if (this.types.vertices) {
+    //   this.types.vertices.material.size = flag
+    //     ? this.vertexFocusSize
+    //     : this.isSelected
+    //       ? this.vertexFocusSize - 2
+    //       : this.originalWidth;
+    // } else if (this.types.edges) {
+    //   this.types.edges.material.linewidth = flag
+    //     ? this.edgeFocusWidth
+    //     : this.isSelected
+    //       ? this.edgeFocusWidth - 2
+    //       : this.originalWidth;
+    // }
   }
 
   toggleSelection() {
